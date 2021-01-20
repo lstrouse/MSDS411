@@ -1,0 +1,262 @@
+---
+title: "Wine Sales Analysis"
+author: "Logan Strouse"
+date: "6/4/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+```
+
+```{r Imports, include=FALSE}
+setwd("~/Desktop/NW MSDS/MSDS411/Unit 3/Wine Sales/")
+train <- read.csv("Wine_Training.csv")
+test <- read.csv("Wine_Test.csv")
+```
+
+```{r Libraries, include=FALSE}
+library(ggplot2)
+library(MASS)
+library(pscl)
+library(dplyr)
+library(readr)
+library(corrplot)
+library(zoo)
+library(psych)
+library(ROCR)
+library(car)
+library(InformationValue)
+library(pbkrtest)
+library(car)
+library(leaps)
+library(glm2)
+library(aod)
+library(mice)
+library(knitr)
+library(rpart)
+library(missForest)
+```
+## Bingo Bonus
+.... I would like to be considered for a few bonus points for using a missForest package to impute missing variables for the first time. I had been using a different package called mice in prior assignments. I also would like to be considered for bonus points, in regards to my champion model. It was a hurdle model and took research to understand it's underworkings and to fine tune.
+## Introduction
+
+....This assignment was tasking us to create a model that could successfully predict the amount of sample cases of wine a particular company would order after a sampling of the said wine. There was a multitude of different variables that were available to help with the prediction. They include: Acid Index, Alcohol, Chlorides, Citric Acid, Density, Fixed Acidity, Free Sulfur Dioxide, Label Appeal, Residual Sugar, Stars, Sulphates,Total Sulfur Dioxide,Volatile Acidity and pH. In order to most accurately predict the target variable, a group of different models and types will be created in order to choose a champion model that most accurately reflects the data available.
+
+## Data Exploration
+
+....The training data set contained 12,795 individual observations and 15 variables, not counting the index. In order to get an idea of how the target variable was distributed, I created the below histogram based on density and counts. Based on the below histogram, It appears that the variable is zero inflated. This is something to continue to be mindful of when building the models.The next step included investigating the data set further to see if there was any variables where the summary statistics appeared to be of interest. I used the describe function, as well as sapply to assess which variables had the most missing values. Below my histograms are the tables for these. After further inspection of these tables, Stars and Sulphates both appeared to have the most missing values. There is a possiblity that maybe a bunch of wines (3,359 were considered so poor of quality), that not many were ordered. I think the missing Sulphates values could be explained due to the lack of sulphate in red wine vs. white wine. 
+
+```{r Target counts, echo=FALSE}
+ggplot(data=train, aes(train$TARGET)) + 
+  geom_histogram(binwidth =1, 
+                 col="Black", 
+                 aes(fill=..density..,)) + ggtitle("Distribution of Wine Cases Purchased") + xlab("Wine Cases Purchased") + ylab("Total Instances") +         labs("Density")+
+  scale_fill_gradientn("Density",colours = topo.colors(2))
+```
+
+```{r Summary Stats, echo=FALSE}
+describe(train)
+sapply(train, function(x) sum(is.na(x)))
+```
+
+## Data Preparation
+
+.... After assessing the above tables it was determined that the above variables would need to have their missing values imputed. It was at this point that I used the missForest package and it's algorithm to impute for the missing NA values. The sapply function was applied after doing this to ensure that all variables were dealt with in the process. It was at this point, that I also followed the same process to clean up the missing variables and NA values for the test data set so that it would be ready to apply my model to it. Once this was done,I decided to look further into some specific variables to see if they could be bucketed. I took the STARS varaible and ended up bucketing that variable into two and under stars. Everything from beyond two went into a higher rating bucket. I did this to see the difference from the highly concentrated two star rated wines and others. As the models were getting built, the binning of sulphates is what ended up having the biggest impact on the accuracy of the model. It helped to lower the AIC scores and helped to maintain the range of the predicted target.
+
+.... The below plot helps to illustrate the dispersion of the Star ratings. It shows a clear peak at around two with 50% of the density sitting there. I did the same type of ggplot for the sulphates as well. The distribution here is what suggested that binning would be a good possiblity with the density able to be separated into 4 distinct groupings, with a heavy concentration around 0 to 1.
+
+```{r Cleaning, include=FALSE}
+train.imp <- missForest(train[,6:16])
+train_clean <- train.imp$ximp
+train_clean$INDEX <- train$INDEX
+train_clean$TARGET <- train$TARGET
+train_clean$FixedAcidity <- train$FixedAcidity
+train_clean$VolatileAcidity <- train$VolatileAcidity
+train_clean$CitricAcid <- train$CitricAcid
+train_clean <- train_clean[,c(12,13,14,15,16,1,2,3,4,5,6,7,8,9,10,11)]
+sapply(train_clean, function(x) sum(is.na(x)))
+test.imp <- missForest(test[,6:16])
+test_clean <- test.imp$ximp
+test_clean$INDEX <- test$INDEX
+test_clean$TARGET <- test$TARGET
+test_clean$FixedAcidity <- test$FixedAcidity
+test_clean$VolatileAcidity <- test$VolatileAcidity
+test_clean$CitricAcid <- test$CitricAcid
+test_clean <- test_clean[,c(12,13,14,15,16,1,2,3,4,5,6,7,8,9,10,11)]
+```
+
+```{r Density of Star Rating, echo=FALSE}
+ggplot(data=train_clean, aes(train_clean$STARS)) + 
+  geom_histogram(binwidth =1, 
+                 col="Black", 
+                 aes(fill=..density..,)) + ggtitle("Distribution Ratings") + xlab("Rating") + ylab("Counts") + labs("Density")+
+  scale_fill_gradientn("Density",colours = heat.colors(2))
+ggplot(data=train_clean, aes(train_clean$Sulphates)) + 
+  geom_histogram(binwidth =1, 
+                 col="Black", 
+                 aes(fill=..density..,)) + ggtitle("Distribution Sulphates") + xlab("Acidity") + ylab("Counts") + labs("Density")+
+  scale_fill_gradientn("Density",colours = heat.colors(2))
+```
+
+```{r Binning both groups, include=FALSE}
+train_clean$STARS_bin[train_clean$STARS <= 2] <- "Lower Rating"
+train_clean$STARS_bin[train_clean$STARS > 2] <- "Higher Rating"
+train_clean$STARS_bin <- factor(train_clean$STARS_bin)
+train_clean$STARS_bin <- factor(train_clean$STARS_bin, levels=c("Lower Rating","Higher Rating"))
+train_clean$Sulphates_bin[train_clean$Sulphates >= -3.130] <- "low"
+train_clean$Sulphates_bin[train_clean$Sulphates >= .320 & train_clean$Sulphates <.500 ] <- "medium"
+train_clean$Sulphates_bin[train_clean$Sulphates >= .500 & train_clean$Sulphates <.780 ] <- "high"
+train_clean$Sulphates_bin[train_clean$Sulphates >= .780] <- "highest"
+train_clean$Sulphates_bin <- factor(train_clean$Sulphates_bin)
+train_clean$Sulphates_bin <- factor(train_clean$Sulphates_bin, levels=c("low","medium","high","highest"))
+test_clean$STARS_bin[test_clean$STARS <= 2] <- "Lower Rating"
+test_clean$STARS_bin[test_clean$STARS > 2] <- "Higher Rating"
+test_clean$STARS_bin <- factor(test_clean$STARS_bin)
+test_clean$STARS_bin <- factor(test_clean$STARS_bin, levels=c("Lower Rating","Higher Rating"))
+test_clean$Sulphates_bin[test_clean$Sulphates >= -3.130] <- "low"
+test_clean$Sulphates_bin[test_clean$Sulphates >= .320 & test_clean$Sulphates <.500 ] <- "medium"
+test_clean$Sulphates_bin[test_clean$Sulphates >= .500 & test_clean$Sulphates <.780 ] <- "high"
+test_clean$Sulphates_bin[test_clean$Sulphates >= .780] <- "highest"
+test_clean$Sulphates_bin <- factor(test_clean$Sulphates_bin)
+test_clean$Sulphates_bin <- factor(test_clean$Sulphates_bin, levels=c("low","medium","high","highest"))
+```
+
+.... After the above graphs were binned, I replotted them to look at the new output and see the final results. Below are examples of this.
+
+```{r output post_binning, echo=FALSE}
+ggplot(data=train_clean, aes(train_clean$STARS_bin)) + 
+  geom_bar(fill = "#FF7777") + ggtitle("Distribution Ratings") + xlab("Rating") + ylab("Counts") + labs("Density")+
+  scale_fill_gradientn("Density",colours = heat.colors(2))
+ggplot(data=train_clean, aes(train_clean$Sulphates_bin)) + 
+  geom_bar(fill = "#FF7777") + ggtitle("Distribution Sulphates") + xlab("Acidity") + ylab("Counts") + labs("Density")+
+  scale_fill_gradientn("Density",colours = heat.colors(2))
+```
+
+```{r Model Building, include=FALSE}
+# Standard Model
+first_Linear_model <- lm(TARGET~ FixedAcidity + VolatileAcidity + CitricAcid + ResidualSugar + Chlorides + FreeSulfurDioxide + TotalSulfurDioxide + Density + pH + Sulphates_bin + Alcohol + LabelAppeal + AcidIndex + STARS, data = train_clean)
+summary(first_Linear_model)
+coefficients(first_Linear_model)
+train_clean$first_Linear_model <-fitted(first_Linear_model)
+AIC(first_Linear_model)
+
+# Second Model using Stepwise AIC Regression
+stepwise_lm <- stepAIC(first_Linear_model, direction="both")
+stepwise_lm$anova
+train_clean$stepwise_lm <-fitted(stepwise_lm)
+AIC(stepwise_lm)
+
+# Third Model Poisson
+poisson_model <- glm(TARGET~ FixedAcidity + VolatileAcidity + CitricAcid + ResidualSugar + Chlorides + FreeSulfurDioxide + TotalSulfurDioxide + Density + pH + Sulphates_bin + Alcohol + LabelAppeal + AcidIndex + STARS, family="poisson"(link="log"), data=train_clean)
+summary(poisson_model)
+coef(poisson_model)
+train_clean$poisson <- predict(poisson_model, newdata = train_clean, type = "response")
+AIC(poisson_model)
+
+# Fourth Model Negative Binomial
+NBR_Model<-glm.nb(TARGET~ FixedAcidity + VolatileAcidity + CitricAcid + ResidualSugar + Chlorides + FreeSulfurDioxide + TotalSulfurDioxide + Density + pH + Sulphates_bin + Alcohol + LabelAppeal + AcidIndex + STARS, data=train_clean)
+summary(NBR_Model)
+train_clean$NBR <- predict(NBR_Model, newdata = train_clean, type = "response")
+AIC(NBR_Model)
+
+#fifth model ZIP
+ZIP_Model<-zeroinfl(TARGET~ FixedAcidity + VolatileAcidity + CitricAcid + ResidualSugar + Chlorides + FreeSulfurDioxide + TotalSulfurDioxide + Density + pH + Sulphates_bin + Alcohol + LabelAppeal + AcidIndex + STARS, data=train_clean)
+summary(ZIP_Model)
+train_clean$ZIP <- predict(ZIP_Model, newdata = train_clean, type = "response")
+AIC(ZIP_Model)
+
+#6th Model ZINB
+ZINB_Model<-zeroinfl(TARGET~ FixedAcidity + VolatileAcidity + CitricAcid + ResidualSugar + Chlorides + FreeSulfurDioxide + TotalSulfurDioxide + Density + pH + Sulphates_bin + Alcohol + LabelAppeal + AcidIndex + STARS, data=train_clean, dist = "negbin", EM=TRUE)
+summary(ZINB_Model)
+train_clean$ZINB <- predict(ZINB_Model, newdata = train_clean, type = "response")
+AIC(ZINB_Model)
+
+#7th Model Hurdle
+modelHurdle <- hurdle(TARGET~ FixedAcidity + VolatileAcidity + CitricAcid + ResidualSugar + Chlorides + FreeSulfurDioxide + TotalSulfurDioxide + Density + pH + Sulphates_bin + Alcohol + LabelAppeal + AcidIndex + STARS,
+                      dist    = "negbin",
+                      data    = train_clean)
+summary(modelHurdle)
+AIC (modelHurdle)
+train_clean$modelHurdle <- fitted(modelHurdle)
+
+```
+
+
+## Build Models
+
+....This was the point in the exercise, where I built a multitude of different models. I ended up using every variable avaiable in some form during my model building to make it robust. I did exclude some variables when I used the binned version of them that I had created. I will list out the 7 models below and some of their unique characteristics. As seen below, most of the coefficients from model to model kept the same sign for the most part. Citric Acid for example, is a positive coeffient in all models. The magnitudes of the actual coefficients did change though from model to model, especially when jumping from a standard linear regression model to something like a poisson model.
+
+>The first model I ran was a standard linear model. It did not handle the zero inflated variables well.
+
+```{r mod 1, echo=FALSE}
+summary(first_Linear_model)
+coefficients(first_Linear_model)
+print('AIC IS:')
+AIC(first_Linear_model)
+```
+
+>The second model I built was a stepwise model and it provided similar results to the first one, with slightly better AIC scores.
+
+```{r mod 2, echo=FALSE}
+summary(stepwise_lm)
+coefficients(stepwise_lm)
+print('AIC IS:')
+AIC(stepwise_lm)
+```
+
+> The third model I built was a poisson model. Overall, I had a worse AIC score and I continued to refine the next couple models to gain better accuracy.
+
+```{r mod 3, echo=FALSE}
+summary(poisson_model)
+coef(poisson_model)
+print('AIC IS:')
+AIC(poisson_model)
+```
+
+> The fourth model created was a negative binomial. It was very similar to the poisson model. The AIC was ever so slightly worse but the deviance was slightly less. 
+
+```{r mod 4, echo=FALSE}
+summary(NBR_Model)
+coef(NBR_Model)
+print('AIC IS:')
+AIC(NBR_Model)
+```
+
+> The fifth model was a zero inflated poisson model. This model is where I really started to notice better performance results. By taking into account the zero inflated target correctly, the AIC dropped significantly and became more competitive. I ended up using this as my second best model, after the champion model that was chosen later.
+
+```{r mod 5, echo=FALSE}
+summary(ZIP_Model)
+coef(ZIP_Model)
+print('AIC IS:')
+AIC(ZIP_Model)
+```
+
+> The sixth model was a zero inflated negative binomial. The results for this model were very similar to the prior ZIP model, but just a slighly worse in regards to the AIC and a few other statistics.
+
+```{r mod 6, echo=FALSE}
+summary(ZINB_Model)
+coef(ZINB_Model)
+print('AIC IS:')
+AIC(ZINB_Model)
+```
+
+> The seventh model I built is a hurdle model. I researched this model on line and found out that it is a good two way model that does automated truncating as part of it's algorithm, amoungst other advanced features. It had the best AIC score of any of the prior models! Below are the results.
+
+```{r mod 7, echo=FALSE}
+summary(modelHurdle)
+coef(modelHurdle)
+print('AIC IS:')
+AIC (modelHurdle)
+```
+
+## Select Models
+.... Overall, I ended up selecting the hurdle model. It had the best AIC score and will be the easiest to explain due to it's two part structure. It includes a count model, along with a zero hurdle model coeffient. Based on my research, I read that this type of model is good for when there is only one source for why a zero would happen. In this case, it was simply a customer deciding to not by a case of wine. I believe that this was a good scenerio to deploy this type of model.
+
+## Stand Alone Data Step and Scores
+>These were both done and submitted separately.
+
+## Conclusion
+.... This was an excellent assignment. It allowed me to put together everthing I had learned in the quarter to build a couple good models. I was able to discover a new way to impute variables with the missForest package, as well as use a new/different modeling package called Hurdle. I also was able to build a few nice looking ggplot charts as well to illustrate the data. My final champion model had a good distribution of the target variable. The mean ended up being close to around 3 and the range was from about 0 to just under 8. Overall, this project was a success and if we had unaltered data from the beginning it might have been possible to further tighten the model. Thanks for a great quarter Professor!
+
+
